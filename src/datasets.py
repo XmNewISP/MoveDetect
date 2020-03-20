@@ -68,8 +68,7 @@ class AbstractDataset(Dataset):
             cropped_imgs.append(tvF.crop(img, i, j, self.crop_size, self.crop_size))
 
         return cropped_imgs
-
-
+        
     def __getitem__(self, index):
         """Retrieves image from data folder."""
 
@@ -108,7 +107,7 @@ class MoveDetectDataset(AbstractDataset):
         begin_index = 0
         for case in caselist:
             namelist = os.listdir(os.path.join(root_dir,case))
-            filelist=[os.path.join(root_dir,case,name) for name in namelist if (name != "groundtruth.jpg")]
+            filelist=[os.path.join(root_dir,case,name) for name in namelist if ("groundtruth" not in name)]
             self.imgs.extend(filelist)
             self.case_indexmap[os.path.join(root_dir,case)] = (begin_index,begin_index+len(filelist))
             begin_index += len(filelist)
@@ -209,7 +208,7 @@ class MoveDetectDataset2(AbstractDataset):
         begin_index = 0
         for case_level in case_level_list:
             namelist = os.listdir(os.path.join(root_dir,case_level))
-            filelist=[os.path.join(root_dir,case_level,name) for name in namelist if (name != "groundtruth.jpg")]
+            filelist=[os.path.join(root_dir,case_level,name) for name in namelist if ("groundtruth" not in name)]
             self.imgs.extend(filelist)
             self.case_level_indexmap[os.path.join(root_dir,case_level)] = (begin_index,begin_index+len(filelist))
             begin_index += len(filelist)
@@ -232,8 +231,20 @@ class MoveDetectDataset2(AbstractDataset):
         img_path = self.imgs[index]
         img =  Image.open(img_path).convert('RGB')
         #############################################
-        label = np.random.choice(a=[0,1], size=1, replace=False, p=[0.1,0.9])  #正样本概率更高一些
-        if (label==1) :
+        mode = np.random.choice(a=[0,1,2],p=[0.1,0.4,0.5])
+        if mode == 2:       #动态样本(边沿移动)
+            label = 1
+            edge_points = np.load(os.path.split(img_path)[0]+"/"+"groundtruth_edge.npy")
+            #print("edge_points.shape--->",edge_points.shape)
+            if edge_points.shape[0]==0: #纯色背景无边界,则转为运动场景
+                mode = 1;
+        if mode == 0:       #静态样本
+            label = 0
+            begin_index,end_index = self.case_level_indexmap[os.path.split(img_path)[0]]
+            random_index = np.random.randint(end_index-begin_index)+1    #编号从1开始
+            random_img_path = os.path.split(img_path)[0]+"/"+"{:0>5d}.jpg".format(random_index) 
+        if mode == 1:       #动态样本(跨场景)
+            label = 1
             for i in range(100): 
                 random_index = np.random.randint(len(self.imgs)) 
                 random_img_path = self.imgs[random_index]
@@ -241,26 +252,36 @@ class MoveDetectDataset2(AbstractDataset):
                     break
                 if i >= 99:
                     assert False, f"Get random img path Error!!!"
-        else :
-            begin_index,end_index = self.case_level_indexmap[os.path.split(img_path)[0]]
-            random_index = np.random.randint(end_index-begin_index)+1    #编号从1开始
-            random_img_path = os.path.split(img_path)[0]+"/"+"{:0>5d}.jpg".format(random_index)
-        #print(label,img_path,random_img_path)
-        #print(img_path.split("/")[-2].split("_")[0])
-        #print(random_img_path.split("/")[-2].split("_")[0])
-        other = Image.open(random_img_path).convert('RGB')        
         #############################################
         crops_list = list()
-        #一次crop个
-        for i in range(256):
-            crops_imgs = self._random_crop([img,other])
-            img_crop = crops_imgs[0]
-            other_crop = crops_imgs[1]
-            #crops_imgs[0].save('crop0.png')
-            #crops_imgs[1].save('crop1.png')
-            #print("------label:",label)
-            #exit()
-            crops_list.append((img_crop,other_crop,label))
+        if mode == 0 or mode == 1:
+            other = Image.open(random_img_path).convert('RGB')
+            #一次crop多个
+            for i in range(512):
+                crops_imgs = self._random_crop([img,other])
+                img_crop = crops_imgs[0]
+                other_crop = crops_imgs[1]
+                #crops_imgs[0].save('crop0.png')
+                #crops_imgs[1].save('crop1.png')
+                #print("------label:",label)
+                #exit()
+                crops_list.append((img_crop,other_crop,label))            
+        else :
+            #一次crop多个
+            for i in range(512):
+                point = edge_points[np.random.randint(edge_points.shape[0])]
+                offset = (np.random.randint(6,24),np.random.randint(6,24)) #随机偏移
+                point_other = point+offset if i%2==0 else point-offset
+                #print("point",point)
+                #print("offset",offset)
+                #print("point_other",point_other)
+                img_crop = tvF.crop(img, point[0]-self.crop_size//2, point[1]-self.crop_size//2, self.crop_size, self.crop_size)
+                other_crop = tvF.crop(img, point_other[0]-self.crop_size//2, point_other[1]-self.crop_size//2, self.crop_size, self.crop_size)
+                #img_crop.save('crop0.png')
+                #other_crop.save('crop1.png')
+                #print("------mode:",mode)
+                #exit()
+                crops_list.append((img_crop,other_crop,label))
         return crops_list
         
     def is_cache_list_empty(self):

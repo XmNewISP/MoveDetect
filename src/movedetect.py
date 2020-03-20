@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.optim import Adam, lr_scheduler
 import torchvision.transforms.functional as tvF
 import torch.nn.functional as F
-from unet import UNet, MdNet
+from unet import MdNet
 from utils import *
 
 import os
@@ -220,38 +220,49 @@ class MoveDetect(object):
         # Load PIL image
         for img_path in filelist:
             img =  Image.open(img_path).convert('RGB')
-            w, h = img.size
-            '''
-            if w % 32 != 0:
-                w = (w//32)*32
-            if h % 32 != 0:
-                h = (h//32)*32
-            '''
-            img = tvF.crop(img, 0, 0, h, w)
+            print(img.size)
             source = tvF.to_tensor(img)
             source = source.unsqueeze(0)
-            print(source.size())
             other_path = img_path.replace(".jpg", "_other.jpg")
             other = Image.open(other_path).convert('RGB')
-            other = tvF.crop(other, 0, 0, h, w)
             other = tvF.to_tensor(other)
             other = other.unsqueeze(0)
-            print(other.size())
-            
             if self.use_cuda:
                 source = source.cuda()
                 other = other.cuda()
 
             # MoveDetect
             input = torch.cat((source,other),dim=1)
-            output = self.model(input)
+            output = self.model(input).detach()
             #print("111--------->",output.size())
             #print(output)            
             result = F.softmax(output, dim=1).squeeze(0).detach().cpu()
             #print("222--------->",result.size())
             #print(result[1])           
-            md_image = tvF.to_pil_image(result[1])
+            md_fmap = tvF.to_pil_image(result[1])
+            print(md_fmap.size)
+            #放大到原图:有技巧《学习笔记:关于感受野》
+            MD_NET_STRIDE = 8
+            MD_NET_RECEPTIVE_FIELD = 32
+            image_box_x1 = MD_NET_RECEPTIVE_FIELD//2
+            image_box_y1 = MD_NET_RECEPTIVE_FIELD//2
+            image_box_x2 = (md_fmap.size[0]-1)*MD_NET_STRIDE+MD_NET_RECEPTIVE_FIELD//2
+            image_box_y2 = (md_fmap.size[1]-1)*MD_NET_STRIDE+MD_NET_RECEPTIVE_FIELD//2
+            #print(image_box_x1,image_box_y1,image_box_x2,image_box_y2)
+            #只是中间有效部分
+            rsz_w = image_box_x2-image_box_x1+1
+            rsz_h = image_box_y2-image_box_y1+1
+            md_rsz = md_fmap.resize((rsz_w,rsz_h))  
+            #补全四周，得到原图的mask
+            md_mask  = Image.new("L",(img.size))          
+            md_mask.paste(md_rsz,(image_box_x1,image_box_y1))
+            md_mask = md_mask
+            #运动信息叠加到原图中去
+            md_red_label = Image.new("RGB",(img.size),(255,0,0))          
+            md_red = Image.composite(md_red_label,img,md_mask)
+            #print(md_red.size)
             fname = os.path.basename(img_path)
-            md_image.save(os.path.join(save_path, f'{fname}-md.png'))
+            md_red.save(os.path.join(save_path, f'{fname}-md.png'))
+            
 
             

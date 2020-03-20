@@ -32,4 +32,4 @@ if __name__ == '__main__':
     md = MoveDetect(params, trainable=False)
     md.load_model(params.load_ckpt)
     md.test2()
-    
+
